@@ -1,8 +1,55 @@
 #include <windows.h>
 
+// getting rid of the three meanings of static depending on the scope
+#define internal_function static
+#define local_persist static
+#define global_variable static
+
+// global for the time being
+global_variable bool running;
+global_variable BITMAPINFO bitmapInfo;
+global_variable void *bitmapMemory;
+global_variable HBITMAP bitmapHandle;
+global_variable HDC deviceContext;
+
+internal_function void win32ResizeDIBSection(int width, int height) {
+
+  // TODO: Maybe don't free first, free after, then free first if that fails.
+
+  // free our DIBSection
+  if (bitmapHandle) {
+    DeleteObject(bitmapHandle);
+  }
+  if (!deviceContext) {
+	  // TODO: should we recreate it?
+	  deviceContext = CreateCompatibleDC(0);
+  }
+
+  bitmapInfo.bmiHeader.biSize = sizeof(bitmapInfo.bmiHeader);
+  bitmapInfo.bmiHeader.biWidth = width;
+  bitmapInfo.bmiHeader.biHeight = height;
+  bitmapInfo.bmiHeader.biPlanes = 1;
+  bitmapInfo.bmiHeader.biBitCount = 32;
+  bitmapInfo.bmiHeader.biCompression = BI_RGB;
+
+  deviceContext = CreateCompatibleDC(0);
+
+  bitmapHandle = CreateDIBSection(deviceContext, &bitmapInfo, DIB_RGB_COLORS, &bitmapMemory, 0, 0);
+}
+
+internal_function void win32UpdateWindow(HDC deviceContext, int x, int y, int width, int height) {
+  // copy one rectangular buffer to another
+  StretchDIBits(deviceContext,
+    x, y, width, height, // destination
+    x, y, width, height, // source
+    bitmapMemory,
+    &bitmapInfo,
+    DIB_RGB_COLORS, SRCCOPY);
+}
+
 // Windows callback to handle different system messages like resizing,
 // paiting, etc
-LRESULT CALLBACK mainWindowCallback(
+LRESULT CALLBACK win32MainWindowCallback(
   HWND window,
   UINT message,
   WPARAM wParam,
@@ -12,12 +59,19 @@ LRESULT CALLBACK mainWindowCallback(
 
   switch (message) {
     case WM_SIZE: {
+      RECT clientRect;
+      GetClientRect(window, &clientRect);
+      int width = clientRect.right - clientRect.left;
+      int height = clientRect.bottom - clientRect.top;
+      win32ResizeDIBSection(width, height);
       OutputDebugStringA("WM_SIZE\n");
     } break;
     case WM_DESTROY: {
+      running = false;
       OutputDebugStringA("WM_DESTROY\n");
     } break;
     case WM_CLOSE: {
+      running = false;
       OutputDebugStringA("WM_CLOSE\n");
     } break;
     case WM_ACTIVATEAPP: {
@@ -30,14 +84,12 @@ LRESULT CALLBACK mainWindowCallback(
       int width = (paint.rcPaint.right - paint.rcPaint.left) / 2;
       int height = (paint.rcPaint.bottom - paint.rcPaint.top);
 
-      int x1 = paint.rcPaint.left;
-      int y1 = paint.rcPaint.top;
+      int x = paint.rcPaint.left;
+      int y = paint.rcPaint.top;
 
-      int x2 = paint.rcPaint.left + width;
-      int y2 = paint.rcPaint.top;
+      win32UpdateWindow(deviceContext, x, y, width, height);
 
-      PatBlt(deviceContext, x1, y1, width, height, BLACKNESS);
-      PatBlt(deviceContext, x2, y2, width, height, WHITENESS);
+      PatBlt(deviceContext, x, y, width, height, BLACKNESS);
 
       EndPaint(window, &paint);
     } break;
@@ -59,7 +111,7 @@ int CALLBACK WinMain(
 {
   WNDCLASS windowClass = {};
 
-  windowClass.lpfnWndProc = mainWindowCallback;
+  windowClass.lpfnWndProc = win32MainWindowCallback;
   windowClass.hInstance = instance;
   windowClass.lpszClassName = "HandmadeHeroWindowClass";
 
@@ -80,10 +132,11 @@ int CALLBACK WinMain(
     );
 
     if (windowHandle) {
+      running = true;
       MSG message;
 
       // ilustrative state loop
-      for (;;) {
+      while (running) {
         if(GetMessageA(&message, 0, 0, 0) < 0){ break; }
 
         TranslateMessage(&message);
